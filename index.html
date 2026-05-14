@@ -372,106 +372,168 @@
         setInterval(updateLiveConsultationCount, 1000); // 1초마다 확인하지만 실제 변경은 15초 주기로 발생
     </script>
 
-    <!-- ==========================================
-         2. 파이어베이스 조회수 연결 로직
-         ========================================== -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    <!-- Firebase Firestore REST 공용 조회수 카운터 -->
+<script>
+(function () {
+    const todayViewsEl = document.getElementById('todayViews');
+    const totalViewsEl = document.getElementById('totalViews');
 
-        // 파이어베이스 설정 (미리보기 환경 & 실제 호스팅 환경 자동 분기)
-        let firebaseConfig;
-        let isPreviewEnv = false;
-        
-        if (typeof __firebase_config !== 'undefined') {
-            // 현재 우측 미리보기(Canvas) 환경인 경우 자동으로 로드
-            firebaseConfig = JSON.parse(__firebase_config);
-            isPreviewEnv = true;
-        } else {
-            // ⚠️ 실제 사용자님의 사이트에 코드를 올리실 때는 
-            // 이 부분을 jinn-c154f 프로젝트 설정값으로 채워주세요!
-            firebaseConfig = {
-                // apiKey: "사용자님의_API_KEY",
-                // authDomain: "jinn-c154f.firebaseapp.com",
-                // projectId: "jinn-c154f",
-                // storageBucket: "jinn-c154f.appspot.com",
-                // ...
-            };
+    const PROJECT_ID = 'jinn-c154f';
+    const COLLECTION = 'gameshop_public_stats';
+    const DOCUMENT = 'global_views_v1';
+
+    const BASE_URL =
+        `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${COLLECTION}/${DOCUMENT}`;
+
+    function getKoreaDateKey() {
+        const parts = new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'Asia/Seoul',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+        }).formatToParts(new Date());
+
+        const y = parts.find(p => p.type === 'year').value;
+        const m = parts.find(p => p.type === 'month').value;
+        const d = parts.find(p => p.type === 'day').value;
+
+        return `${y}-${m}-${d}`;
+    }
+
+    function getIntField(doc, name) {
+        const field = doc && doc.fields && doc.fields[name];
+        if (!field) return 0;
+        if (field.integerValue !== undefined) return Number(field.integerValue);
+        if (field.doubleValue !== undefined) return Number(field.doubleValue);
+        return 0;
+    }
+
+    function getStringField(doc, name) {
+        const field = doc && doc.fields && doc.fields[name];
+        if (!field) return '';
+        return field.stringValue || '';
+    }
+
+    function render(today, total) {
+        if (todayViewsEl) todayViewsEl.textContent = Number(today || 0).toLocaleString('ko-KR');
+        if (totalViewsEl) totalViewsEl.textContent = Number(total || 0).toLocaleString('ko-KR');
+    }
+
+    function renderFail() {
+        if (todayViewsEl) todayViewsEl.textContent = 'DB확인';
+        if (totalViewsEl) totalViewsEl.textContent = 'DB확인';
+    }
+
+    async function readCounter() {
+        const res = await fetch(BASE_URL, { method: 'GET' });
+
+        if (res.status === 404) return null;
+
+        if (!res.ok) {
+            const text = await res.text();
+            throw new Error(`READ ${res.status}: ${text}`);
         }
 
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
+        return await res.json();
+    }
 
-        // Firestore 경로 설정
-        let statsRef;
-        if (isPreviewEnv) {
-            // 미리보기 환경 규칙 적용 (안전한 테스트용)
-            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-            statsRef = doc(db, 'artifacts', appId, 'public', 'data', 'gameshop_public_stats', 'view_stats');
-        } else {
-            // 캡처본에 있던 실제 사용자님의 DB 규칙 경로
-            statsRef = doc(db, 'gameshop_public_stats', 'view_stats');
-        }
+    async function createCounter(todayKey) {
+        const createUrl =
+            `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${COLLECTION}?documentId=${DOCUMENT}`;
 
-        // 한국 시간(KST) 기준 날짜(YYYY-MM-DD) 가져오기
-        const getKSTDateStr = () => {
-            const now = new Date();
-            const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-            const kstTime = new Date(utc + (9 * 3600000)); // +9시간
-            return kstTime.toISOString().split('T')[0];
-        };
-
-        const processViews = async (user) => {
-            if (!user) return;
-            const dateStr = getKSTDateStr();
-            
-            try {
-                const docSnap = await getDoc(statsRef);
-                let todayViews = 0;
-                let totalViews = 0;
-
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-                    totalViews = data.totalViews || 0;
-                    if (data.lastDate === dateStr) {
-                        todayViews = data.todayViews || 0;
-                    }
-                }
-
-                // 새로고침 할 때마다 무조건 조회수 증가 (sessionStorage 제한 해제)
-                totalViews++;
-                todayViews++;
-                await setDoc(statsRef, {
-                    totalViews: totalViews,
-                    todayViews: todayViews,
-                    lastDate: dateStr
-                }, { merge: true });
-
-                document.getElementById('todayViews').textContent = todayViews.toLocaleString();
-                document.getElementById('totalViews').textContent = totalViews.toLocaleString();
-
-            } catch(error) {
-                console.error("Firebase 연동 오류:", error);
+        const body = {
+            fields: {
+                today_views: { integerValue: "1" },
+                total_views: { integerValue: "1" },
+                last_date: { stringValue: todayKey },
+                updated_at: { integerValue: String(Date.now()) }
             }
         };
 
-        // Firebase Auth 초기화
-        const initAuth = async () => {
-            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                await signInWithCustomToken(auth, __initial_auth_token);
-            } else {
-                await signInAnonymously(auth);
-            }
-        };
-        
-        initAuth();
-        onAuthStateChanged(auth, (user) => {
-            if (user) {
-                processViews(user);
-            }
+        const res = await fetch(createUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
         });
-    </script>
+
+        if (!res.ok && res.status !== 409) {
+            const text = await res.text();
+            throw new Error(`CREATE ${res.status}: ${text}`);
+        }
+    }
+
+    async function updateCounter(todayKey, todayViews, totalViews) {
+        const patchUrl =
+            `${BASE_URL}?updateMask.fieldPaths=today_views&updateMask.fieldPaths=total_views&updateMask.fieldPaths=last_date&updateMask.fieldPaths=updated_at`;
+
+        const body = {
+            fields: {
+                today_views: { integerValue: String(todayViews) },
+                total_views: { integerValue: String(totalViews) },
+                last_date: { stringValue: todayKey },
+                updated_at: { integerValue: String(Date.now()) }
+            }
+        };
+
+        const res = await fetch(patchUrl, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+
+        if (!res.ok) {
+            const text = await res.text();
+            throw new Error(`UPDATE ${res.status}: ${text}`);
+        }
+    }
+
+    async function countOnce() {
+        const todayKey = getKoreaDateKey();
+
+        let doc = await readCounter();
+
+        if (!doc) {
+            await createCounter(todayKey);
+            render(1, 1);
+            return;
+        }
+
+        const lastDate = getStringField(doc, 'last_date');
+        const oldToday = getIntField(doc, 'today_views');
+        const oldTotal = getIntField(doc, 'total_views');
+
+        const nextToday = lastDate === todayKey ? oldToday + 1 : 1;
+        const nextTotal = oldTotal + 1;
+
+        await updateCounter(todayKey, nextToday, nextTotal);
+        render(nextToday, nextTotal);
+    }
+
+    async function refreshOnly() {
+        try {
+            const doc = await readCounter();
+
+            if (!doc) {
+                render(0, 0);
+                return;
+            }
+
+            render(
+                getIntField(doc, 'today_views'),
+                getIntField(doc, 'total_views')
+            );
+        } catch (e) {
+            console.error('[GAMESHOP] 조회수 읽기 실패:', e);
+        }
+    }
+
+    countOnce().catch((e) => {
+        console.error('[GAMESHOP] 조회수 증가 실패:', e);
+        renderFail();
+    });
+
+    setInterval(refreshOnly, 5000);
+})();
+</script>
 </body>
 </html>
