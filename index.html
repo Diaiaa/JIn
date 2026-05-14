@@ -370,6 +370,41 @@
         }
         updateLiveConsultationCount(); // 로드 시 즉시 실행
         setInterval(updateLiveConsultationCount, 1000); // 1초마다 확인하지만 실제 변경은 15초 주기로 발생
+
+        // ==========================================
+        // 2. 로컬 조회수 임시 카운터
+        // - GitHub Pages처럼 서버가 없는 곳에서도 새로고침할 때마다 올라감
+        // - 같은 브라우저 기준 저장
+        // ==========================================
+        function updateLocalViewsFallback() {
+            const dateStr = getKSTDateStrLocal();
+            const savedDate = localStorage.getItem('jinn_view_date');
+            let todayViews = parseInt(localStorage.getItem('jinn_today_views') || '0', 10);
+            let totalViews = parseInt(localStorage.getItem('jinn_total_views') || '0', 10);
+
+            if (savedDate !== dateStr) {
+                todayViews = 0;
+                localStorage.setItem('jinn_view_date', dateStr);
+            }
+
+            todayViews++;
+            totalViews++;
+
+            localStorage.setItem('jinn_today_views', String(todayViews));
+            localStorage.setItem('jinn_total_views', String(totalViews));
+
+            document.getElementById('todayViews').textContent = todayViews.toLocaleString();
+            document.getElementById('totalViews').textContent = totalViews.toLocaleString();
+        }
+
+        function getKSTDateStrLocal() {
+            const now = new Date();
+            const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+            const kstTime = new Date(utc + (9 * 3600000));
+            return kstTime.toISOString().split('T')[0];
+        }
+
+        updateLocalViewsFallback();
     </script>
 
     <!-- ==========================================
